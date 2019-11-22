@@ -186,7 +186,7 @@ fn main() {
 
                             step += 1;
 
-                            println!("Received request: {:?}", request);
+                            // println!("Received request: {:?}", request);
 
                             if request.change == Change::Add {
                                 for (user, item) in request.interactions.iter() {

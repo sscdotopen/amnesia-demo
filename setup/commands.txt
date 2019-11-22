@@ -1,10 +1,16 @@
+# Install Rust
+https://www.rust-lang.org/tools/install
+
+# untar kafka
+tar -xzf kafka_2.12-2.3.0.tgz
+
 # Start local zookeeper server
 setup/kafka_2.12-2.3.0/bin/zookeeper-server-start.sh setup/kafka_2.12-2.3.0/config/zookeeper.properties
 
 # Start local Kafka server
 setup/kafka_2.12-2.3.0/bin/kafka-server-start.sh setup/kafka_2.12-2.3.0/config/server.properties
 
-# Create topics
+# Create topics (only needs to be done once)
 setup/kafka_2.12-2.3.0/bin/kafka-topics.sh --create --bootstrap-server localhost:9092 --replication-factor 1 --partitions 1 --topic interactions
 setup/kafka_2.12-2.3.0/bin/kafka-topics.sh --create --bootstrap-server localhost:9092 --replication-factor 1 --partitions 1 --topic changes
 
