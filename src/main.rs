@@ -1,21 +1,52 @@
+extern crate kafka;
+#[macro_use]
+extern crate serde_derive;
+extern crate serde;
+extern crate serde_json;
 extern crate timely;
 extern crate differential_dataflow;
 extern crate rand;
-use serde_json::json;
+
+use serde_json::{json, Result};
+use kafka::consumer::{Consumer, FetchOffset, GroupOffsetStorage};
+// use kafka::producer::{Producer, Record, RequiredAcks};
 
 use differential_dataflow::input::InputSession;
 use differential_dataflow::operators::{CountTotal,Count};
 use differential_dataflow::operators::arrange::ArrangeByKey;
 use differential_dataflow::operators::join::JoinCore;
 
+#[derive(Eq, PartialEq, Debug, Serialize, Deserialize)]
+enum Change {
+    Add,
+    Remove
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ChangeRequest {
+    change: Change,
+    interactions: Vec<(u32,u32)>,
+}
+
+
 // A differential version of item-based collaborative filtering using Jaccard similarity for
 // comparing item interaction histories. See Algorithm 1 in https://ssc.io/pdf/amnesia.pdf
 // for details.
 fn main() {
 
+// TODO need to figure out how to safely put this in...
+//    let producer =
+//        Producer::from_hosts(vec!("localhost:9092".to_owned()))
+//            .with_ack_timeout(Duration::from_secs(1))
+//            .with_required_acks(RequiredAcks::One)
+//            .create()
+//            .unwrap();
+
     timely::execute_from_args(std::env::args(), move |worker| {
 
         let mut interactions_input = InputSession::new();
+
+
 
         let probe = worker.dataflow(|scope| {
 
@@ -32,6 +63,8 @@ fn main() {
                     "time": time,
                     "change": change
                 });
+
+                //producer.send(&Record::from_value("changes", json.to_string().as_bytes())).unwrap();
 
                 println!("{}", json);
             });
@@ -128,35 +161,58 @@ fn main() {
             jaccard_similarities.probe()
         });
 
-        let interactions: Vec<(u32, u32)> = vec![
-            (0, 0), (0, 1), (0, 2),
-            (1, 1), (1, 2),
-            (2, 0), (2, 1), (2, 3)
-        ];
+        let mut step: usize = 0;
 
-        for (user, item) in interactions.iter() {
-            if *user as usize % worker.peers() == worker.index() {
-                interactions_input.insert((*user, *item));
+        // {"change":"Add", "interactions":[[1,1], [1,2], [2,0], [2,1], [2,3], [3,1], [3,3]]}
+        // {"change":"Remove", "interactions":[[1,1], [1,2]]}
+
+        let mut consumer =
+            Consumer::from_hosts(vec!("localhost:9092".to_owned()))
+                .with_topic("interactions".to_owned())
+                .with_fallback_offset(FetchOffset::Latest)
+                .with_offset_storage(GroupOffsetStorage::Kafka)
+                .create()
+                .unwrap();
+
+        loop {
+            for message_set in consumer.poll().unwrap().iter() {
+                for message in message_set.messages() {
+
+                    let parsed_request: Result<ChangeRequest> =
+                        serde_json::from_slice(&message.value);
+
+                    match parsed_request {
+                        Ok(request) => {
+
+                            step += 1;
+
+                            println!("Received request: {:?}", request);
+
+                            if request.change == Change::Add {
+                                for (user, item) in request.interactions.iter() {
+                                    interactions_input.insert((*user, *item));
+                                }
+                            } else {
+                                for (user, item) in request.interactions.iter() {
+                                    interactions_input.remove((*user, *item));
+                                }
+                            }
+
+                            interactions_input.advance_to(step);
+                            interactions_input.flush();
+
+                            worker.step_while(|| probe.less_than(interactions_input.time()));
+
+                        },
+                        Err(_) => println!("Error parsing request..."),
+                    }
+
+                }
+                consumer.consume_messageset(message_set).unwrap();
             }
+            consumer.commit_consumed().unwrap();
         }
-
-        interactions_input.advance_to(1);
-        interactions_input.flush();
-
-        worker.step_while(|| probe.less_than(interactions_input.time()));
-
-        let interactions_to_remove: Vec<(u32, u32)> = vec![(1, 1), (1, 2)];
-
-        for (user, item) in interactions_to_remove.iter() {
-            if *user as usize % worker.peers() == worker.index() {
-                interactions_input.remove((*user, *item));
-            }
-        }
-
-        interactions_input.advance_to(2);
-        interactions_input.flush();
-
-        worker.step_while(|| probe.less_than(interactions_input.time()));
 
     }).unwrap();
+
 }
